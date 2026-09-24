@@ -217,11 +217,29 @@ impl CommentRemover {
             }
         }
 
-        comment_ranges.sort_by_key(|r| r.start);
+        // Sort by start, widest-first on ties, then drop any range fully
+        // contained in the immediately preceding (wider) kept range. Most
+        // languages' queries only ever produce disjoint comment ranges, so
+        // this is a no-op there; JSX_AWARE_COMMENT_QUERY (JavaScript/Tsx)
+        // deliberately matches the same comment node twice -- once as
+        // itself, once as part of its enclosing comment-only jsx_expression
+        // -- and needs this merge to avoid removing the same text twice
+        // (which would panic: the second, now-out-of-order range's start
+        // would fall before `last_pos`, an invalid slice).
+        comment_ranges.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+        let mut merged_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(comment_ranges.len());
+        for range in comment_ranges {
+            let nested_in_previous = merged_ranges
+                .last()
+                .is_some_and(|last: &std::ops::Range<usize>| range.start >= last.start && range.end <= last.end);
+            if !nested_in_previous {
+                merged_ranges.push(range);
+            }
+        }
 
         let mut result = String::with_capacity(input.len());
         let mut last_pos = 0;
-        for range in comment_ranges {
+        for range in merged_ranges {
             result.push_str(&input[last_pos..range.start]);
 
             // Preserve only newlines from the comment
@@ -301,5 +319,54 @@ mod keep_pattern_tests {
     #[test]
     fn invalid_pattern_reports_an_error_not_a_silent_skip() {
         assert!(compile_keep_patterns(&["(unclosed".to_string()]).is_err());
+    }
+}
+
+/// Real bug, 2026-09-24: `.tsx` was parsed with the plain `TypeScript`
+/// grammar (no JSX support), and even after routing `.tsx`/explicit
+/// `--language tsx` to the real `Tsx` grammar, a standalone `{/* comment
+/// */}` JSX expression only had its comment text blanked -- the `{`/`}`
+/// braces were left behind as a dead, empty expression in real output.
+/// Found live: a W169 comment-removal sweep over `ec-vbms-gtm4-app`
+/// re-introduced the exact class of "dead JSX expression" leftover a
+/// separate pass in that project had just finished cleaning up.
+#[cfg(all(test, feature = "typescript"))]
+mod jsx_comment_container_tests {
+    use super::*;
+
+    #[test]
+    fn comment_only_jsx_expression_is_removed_whole_not_left_as_empty_braces() {
+        let input = "const x = <div>{/* dead */}<span/></div>;";
+        let remover = CommentRemover::new(TreeSitterLanguage::Tsx, None);
+        let out = remover.process_str(input).unwrap();
+        assert!(!out.contains("dead"), "comment text must be gone: {out:?}");
+        assert!(!out.contains("{}"), "the empty {{}} artifact must not survive: {out:?}");
+        assert!(out.contains("<span/>"), "real JSX content must be untouched: {out:?}");
+    }
+
+    #[test]
+    fn comment_next_to_a_real_expression_only_strips_the_comment() {
+        let input = "const x = <div>{/* note */ y}</div>;";
+        let remover = CommentRemover::new(TreeSitterLanguage::Tsx, None);
+        let out = remover.process_str(input).unwrap();
+        assert!(!out.contains("note"), "comment text must be gone: {out:?}");
+        assert!(out.contains("{ y}") || out.contains("{y}"), "the real expression must survive: {out:?}");
+    }
+
+    #[test]
+    fn keep_pattern_still_protects_a_comment_only_jsx_expression() {
+        let input = "const x = <div>{/* SAFETY: keep */}</div>;";
+        let patterns = compile_keep_patterns(&[]).unwrap();
+        let remover = CommentRemover::with_keep_patterns(TreeSitterLanguage::Tsx, None, patterns);
+        let out = remover.process_str(input).unwrap();
+        assert!(out.contains("SAFETY: keep"), "a keep-pattern match must survive even as the sole child of a jsx_expression: {out:?}");
+    }
+
+    #[test]
+    fn plain_ts_files_are_unaffected_by_the_jsx_aware_query() {
+        let input = "// plain\nconst x: number = 1;";
+        let remover = CommentRemover::new(TreeSitterLanguage::TypeScript, None);
+        let out = remover.process_str(input).unwrap();
+        assert!(!out.contains("plain"), "ordinary .ts comment removal must still work: {out:?}");
     }
 }

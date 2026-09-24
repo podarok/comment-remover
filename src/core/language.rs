@@ -140,6 +140,16 @@ pub enum TreeSitterLanguage {
     #[cfg(feature = "typescript")]
     TypeScript,
 
+    /// TSX -- TypeScript with JSX syntax (feature = "typescript"). A `.tsx`
+    /// file parsed with the plain `TypeScript` grammar (no JSX support) is
+    /// not a "smaller" parse of the same language; the grammar doesn't
+    /// recognize `<div>...</div>`/`{expr}` JSX syntax at all, so JSX-only
+    /// constructs like a comment-only `{/* ... */}` expression container
+    /// are misparsed. Real bug found 2026-09-24: stripped the comment text
+    /// but left the surrounding `{}` behind as dead JSX in real .tsx files.
+    #[cfg(feature = "typescript")]
+    Tsx,
+
     /// SQL (feature = "sql")
     #[cfg(feature = "sql")]
     Sql,
@@ -223,6 +233,8 @@ impl TreeSitterLanguage {
             Self::Swift => tree_sitter_swift::LANGUAGE.into(),
             #[cfg(feature = "typescript")]
             Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            #[cfg(feature = "typescript")]
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
 
             #[cfg(feature = "sql")]
             Self::Sql => tree_sitter_sql::LANGUAGE.into(),
@@ -305,7 +317,9 @@ impl TreeSitterLanguage {
             #[cfg(feature = "swift")]
             "swift" => Some(Self::Swift),
             #[cfg(feature = "typescript")]
-            "ts" | "tsx" | "mts" | "cts" => Some(Self::TypeScript),
+            "ts" | "mts" | "cts" => Some(Self::TypeScript),
+            #[cfg(feature = "typescript")]
+            "tsx" => Some(Self::Tsx),
 
             #[cfg(feature = "sql")]
             "sql" => Some(Self::Sql),
@@ -382,6 +396,8 @@ impl TreeSitterLanguage {
         v.push("swift");
         #[cfg(feature = "typescript")]
         v.push("typescript");
+        #[cfg(feature = "typescript")]
+        v.push("tsx");
         #[cfg(feature = "sql")]
         v.push("sql");
         #[cfg(feature = "perl")]
@@ -464,6 +480,24 @@ impl TreeSitterLanguage {
     }
 }
 
+/// Comment query for JavaScript/TSX: matches every `(comment)` node, plus a
+/// second pattern that additionally captures the enclosing `jsx_expression`
+/// (the `{...}` container) when the comment is its ONLY child -- i.e. a
+/// standalone `{/* ... */}` in JSX with no real expression. The `.` anchors
+/// on both sides of `(comment)` are load-bearing: they require the comment
+/// to be the sole child, so `{/* note */ x}` (comment alongside a real
+/// expression) does NOT match the wider pattern and only the comment text
+/// itself is removed, same as everywhere else.
+///
+/// Without this, only the comment's own byte range gets removed and the
+/// `{`/`}` braces are left behind as a dead, empty JSX expression --
+/// harmless at runtime (renders nothing) but exactly the kind of
+/// unreviewed-looking leftover a comment sweep should not itself create.
+/// [`CommentRemover::process_str`](crate::core::remover::CommentRemover::process_str)
+/// deduplicates the resulting overlapping ranges (the bare-comment pattern
+/// still matches the same node too), keeping the widest one.
+const JSX_AWARE_COMMENT_QUERY: &str = "(jsx_expression . (comment) .) @comment (comment) @comment";
+
 /// A static map from language to the tree‑sitter query string that matches comments.
 ///
 /// For each language, the query string captures all comment nodes (line comments,
@@ -507,7 +541,7 @@ pub static COMMENT_QUERIES: Lazy<HashMap<TreeSitterLanguage, &'static str>> = La
         "(line_comment) @comment (block_comment) @comment",
     );
     #[cfg(feature = "javascript")]
-    m.insert(TreeSitterLanguage::JavaScript, "(comment) @comment");
+    m.insert(TreeSitterLanguage::JavaScript, JSX_AWARE_COMMENT_QUERY);
     #[cfg(feature = "lua")]
     m.insert(TreeSitterLanguage::Lua, "(comment) @comment");
     #[cfg(feature = "php")]
@@ -527,6 +561,8 @@ pub static COMMENT_QUERIES: Lazy<HashMap<TreeSitterLanguage, &'static str>> = La
     m.insert(TreeSitterLanguage::Swift, "(comment) @comment");
     #[cfg(feature = "typescript")]
     m.insert(TreeSitterLanguage::TypeScript, "(comment) @comment");
+    #[cfg(feature = "typescript")]
+    m.insert(TreeSitterLanguage::Tsx, JSX_AWARE_COMMENT_QUERY);
 
     #[cfg(feature = "sql")]
     m.insert(TreeSitterLanguage::Sql, "(comment) @comment");
