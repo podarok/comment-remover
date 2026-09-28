@@ -64,8 +64,10 @@
 /// # use comment_remover::core::whitespace::collapse_whitespace;
 /// let text = "\n\n\nHello\n\nWorld\n\n\n";
 /// let collapsed = collapse_whitespace(text, 1);
-/// // leading: 3 → 1 newline, trailing: 3 → 1 newline
-/// assert_eq!(collapsed, "\nHello\n\nWorld\n");
+/// // leading: 3 blank lines -> 1. Trailing: "World\n" ends the World
+/// // line (not itself a blank line, same as "Hello\n" above it isn't
+/// // counted either) -- the 2 blank lines after it collapse to 1.
+/// assert_eq!(collapsed, "\nHello\n\nWorld\n\n");
 /// ```
 ///
 /// When `max_newlines` is 0, all blank lines are removed:

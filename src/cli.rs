@@ -69,7 +69,9 @@ pub struct Cli {
     /// Collapse consecutive blank lines to at most N.
     ///
     /// After removing comments, sequences of empty lines longer than N are
-    /// reduced to N newlines. If not specified, no collapsing is performed.
+    /// reduced to N newlines. Defaults to 1 when not specified (and not set
+    /// in a config file); pass a larger N, or `--collapse-whitespace
+    /// 18446744073709551615` (`usize::MAX`), to keep wider gaps.
     #[arg(short, long, value_name = "N")]
     pub collapse_whitespace: Option<usize>,
 
@@ -191,7 +193,7 @@ impl Cli {
         };
 
         // FIX: Clone language dan output_dir agar self tidak partially moved
-        let resolved = if let Some(cfg) = config {
+        let mut resolved = if let Some(cfg) = config {
             cfg.merge_with_cli(
                 self.language.clone(),
                 self.collapse_whitespace,
@@ -222,6 +224,13 @@ impl Cli {
                 default_keep_patterns: !self.no_default_keep_patterns,
             }
         };
+
+        // Removing a comment (especially a multi-line block) routinely
+        // leaves a run of now-empty lines behind. Collapse to at most 1
+        // blank line by default so `--in-place` output doesn't need a
+        // manual cleanup pass; `-c`/`--collapse-whitespace N` (or a config
+        // file's `collapse_whitespace`) still overrides this.
+        resolved.collapse = resolved.collapse.or(Some(1));
 
         if self.files.is_empty() {
             return self.handle_stdin(&resolved);
