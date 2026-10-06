@@ -11,7 +11,7 @@
 //!
 //! Loading a configuration file:
 //!
-//! ```
+//! ```no_run
 //! use comment_remover::config::Config;
 //! use std::path::Path;
 //!
