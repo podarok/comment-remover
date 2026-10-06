@@ -232,7 +232,7 @@ The table shows the feature flag, common file extensions, and the comment styles
 | Haskell    | `haskell`    | `.hs`                                         | `--`, `{- -}`           |
 | HTML       | `html`       | `.html`, `.htm`                               | `<!-- -->`              |
 | Java       | `java`       | `.java`                                       | `//`, `/* */`, `/** */` |
-| JavaScript | `javascript` | `.js`, `.jsx`, `.mjs`, `.cjs`                 | `//`, `/* */`           |
+| JavaScript | `javascript` (default) | `.js`, `.jsx`, `.mjs`, `.cjs` (JSX grammar) | `//`, `/* */`, JSX `{/* */}` |
 | Lua        | `lua`        | `.lua`                                        | `--`, `--[[ ]]`         |
 | PHP        | `php`        | `.php`                                        | `//`, `#`, `/* */`      |
 | Python     | `python`     | `.py`, `.pyw`                                 | `#`                     |
@@ -240,7 +240,7 @@ The table shows the feature flag, common file extensions, and the comment styles
 | Rust       | `rust-lang`  | `.rs`                                         | `//`, `/* */`           |
 | Scala      | `scala`      | `.scala`                                      | `//`, `/* */`           |
 | Swift      | `swift`      | `.swift`                                      | `//`, `/* */`           |
-| TypeScript | `typescript` | `.ts`, `.tsx`, `.mts`, `.cts`                 | `//`, `/* */`           |
+| TypeScript | `typescript` (default) | `.ts`, `.mts`, `.cts` (plain grammar), `.tsx` (JSX grammar) | `//`, `/* */`, JSX `{/* */}` |
 | SQL        | `sql`        | `.sql`                                        | `--`, `/* */`           |
 | Perl       | `perl`       | `.pl`, `.pm`, `.t`                            | `#`, POD                |
 | R          | `r`          | `.r`, `.Rdata`                                | `#`                     |
@@ -248,6 +248,24 @@ The table shows the feature flag, common file extensions, and the comment styles
 | Elixir     | `elixir`     | `.ex`, `.exs`                                 | `#`                     |
 | TOML       | `toml`       | `.toml`                                       | `#`                     |
 | INI        | `ini`        | `.ini`, `.cfg`, `.conf`                       | `;`, `#`                |
+
+Default features: `c`, `cpp`, `rust-lang`, `javascript`, `typescript`, `python`.
+
+### TypeScript / TSX / JavaScript behaviour
+
+- `.ts`, `.mts`, `.cts` use the plain TypeScript grammar (angle-bracket assertions `<T>x` parse); `.tsx` and `.js`/`.jsx` use the JSX-aware grammar.
+- A comment that is the only child of a JSX container `{/* note */}` is removed together with the braces; next to an expression, only the comment goes.
+- A comment alone on its line removes the whole line (no blank line left behind); a trailing comment also removes the whitespace before it; an inline comment never glues tokens together (`a/**/b` becomes `a b`, `x+/**/+y` becomes `x+ +y`).
+- Whitespace collapsing (`-c`, default 1) only touches blank lines next to a removed comment line. Blank lines inside template literals, strings and elsewhere are never rewritten. `-c 18446744073709551615` keeps the original line layout (newlines of removed block comments are preserved).
+- Directive comments are kept by default: `@ts-expect-error`, `@ts-ignore`, `@ts-nocheck`, `eslint-disable`, `prettier-ignore`, `istanbul ignore`, `/// <reference ...>`, `@vitest-environment`, `@vite-ignore`, `webpackChunkName`/`webpackPrefetch`/`webpackPreload`. License headers (`/*! ... */`, `@license`, `@preserve`) are removed unless you add `--keep-pattern '@license|@preserve|^/\*!'`.
+- Shebang lines and `"use strict"` / `'use client'` directives are not comments and are untouched.
+
+### Exit codes and unsupported files
+
+- `0` – at least one file processed and no failure (or failures with `--force`).
+- `1` – any error, or **no file processed at all** (all files failed or were skipped), even with `--force`.
+- Files with no known comment syntax (`.svg`, `.tsv`, images) are skipped with one warning line, not counted as failures.
+- A known language whose grammar is not compiled in fails with the missing feature named, e.g. `x.ts: TypeScript support is not compiled into this build (rebuild with --features typescript)`.
 
 ### Feature groups
 
@@ -282,7 +300,7 @@ You can control this with `--threads N`. The tool is I/O‑bound for many small 
 git clone https://github.com/rhythmcache/comment-remover
 cd comment-remover
 
-# Build with default languages (C, C++, Rust, JavaScript, Python)
+# Build with default languages (C, C++, Rust, JavaScript, TypeScript/TSX, Python)
 cargo build --release
 
 # Build with all languages
