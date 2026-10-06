@@ -43,7 +43,7 @@ use tree_sitter::{Query, QueryCursor, StreamingIterator};
 
 use crate::core::language::{COMMENT_QUERIES, TreeSitterLanguage};
 use crate::core::parser;
-use crate::core::whitespace::collapse_whitespace;
+
 use crate::error::{AppError, Result, io_error};
 
 /// Comments matching any of these patterns are always kept, on top of
@@ -190,7 +190,7 @@ impl CommentRemover {
     /// let remover = CommentRemover::new(TreeSitterLanguage::Python, None);
     /// let code = "# a comment\nprint('hello')";
     /// let cleaned = remover.process_str(code).unwrap();
-    /// assert_eq!(cleaned, "\nprint('hello')");
+    /// assert_eq!(cleaned, "print('hello')");
     /// ```
     pub fn process_str(&self, input: &str) -> Result<String> {
         let tree = parser::parse(input, self.language)?;
@@ -237,19 +237,15 @@ impl CommentRemover {
             }
         }
 
-        let mut result = String::with_capacity(input.len());
-        let mut last_pos = 0;
-        for range in merged_ranges {
-            result.push_str(&input[last_pos..range.start]);
-
-            // Preserve only newlines from the comment
-            result.extend(input[range.clone()].chars().filter(|&c| c == '\n'));
-            last_pos = range.end;
-        }
-        result.push_str(&input[last_pos..]);
+        let preserve_layout = self.collapse == Some(usize::MAX);
+        let (mut result, markers) = if preserve_layout {
+            (strip_keeping_lines(input, &merged_ranges), Vec::new())
+        } else {
+            strip_tidy(input, &merged_ranges)
+        };
 
         if let Some(max) = self.collapse {
-            result = collapse_whitespace(&result, max);
+            result = collapse_near_markers(&result, max, &markers);
         }
 
         Ok(result)
@@ -282,6 +278,131 @@ impl CommentRemover {
         let content = fs::read_to_string(path).map_err(|e| io_error(path, e))?;
         self.process_str(&content)
     }
+}
+
+
+fn is_blank(b: u8) -> bool {
+    b == b' ' || b == b'\t' || b == b'\r'
+}
+
+fn is_op(b: u8) -> bool {
+    b"+-*/<>=&|!%^?.:".contains(&b)
+}
+
+fn is_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
+}
+
+fn strip_keeping_lines(input: &str, ranges: &[std::ops::Range<usize>]) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut last = 0;
+    for r in ranges {
+        out.push_str(&input[last..r.start]);
+        out.extend(input[r.clone()].chars().filter(|&c| c == '\n'));
+        last = r.end;
+    }
+    out.push_str(&input[last..]);
+    out
+}
+
+fn strip_tidy(input: &str, ranges: &[std::ops::Range<usize>]) -> (String, Vec<usize>) {
+    let bytes = input.as_bytes();
+    let mut groups: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        match groups.last_mut() {
+            Some(g) if bytes[g.end..r.start].iter().all(|&b| b == b' ' || b == b'\t') => g.end = r.end,
+            _ => groups.push(r.clone()),
+        }
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut markers = Vec::new();
+    let mut last = 0;
+    for g in groups {
+        let line_start = bytes[..g.start].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1).max(last);
+        let line_end = bytes[g.end..].iter().position(|&b| b == b'\n').map_or(bytes.len(), |i| g.end + i);
+        let only_blank_before = bytes[line_start..g.start].iter().all(|&b| is_blank(b));
+        let only_blank_after = bytes[g.end..line_end].iter().all(|&b| is_blank(b));
+
+        if only_blank_before && only_blank_after {
+            out.push_str(&input[last..line_start]);
+            markers.push(out.len());
+            last = (line_end + 1).min(bytes.len());
+        } else if only_blank_after {
+            let mut cut = g.start;
+            while cut > last && is_blank(bytes[cut - 1]) {
+                cut -= 1;
+            }
+            out.push_str(&input[last..cut]);
+            last = g.end;
+        } else if only_blank_before {
+            out.push_str(&input[last..g.start]);
+            let mut resume = g.end;
+            while resume < line_end && is_blank(bytes[resume]) {
+                resume += 1;
+            }
+            last = resume;
+        } else {
+            let mut resume = g.end;
+            while resume < line_end && is_blank(bytes[resume]) {
+                resume += 1;
+            }
+            let after = bytes[resume];
+            let mut cut = g.start;
+            if b",;)]}>".contains(&after) {
+                while cut > last && is_blank(bytes[cut - 1]) {
+                    cut -= 1;
+                }
+            }
+            out.push_str(&input[last..cut]);
+            let before = bytes[g.start - 1];
+            let spaced = resume > g.end || is_blank(before);
+            if !spaced && bytes[g.start] != b'{' && ((is_word(before) && is_word(after)) || (is_op(before) && before == after)) {
+                out.push(' ');
+            }
+            last = resume;
+        }
+    }
+    out.push_str(&input[last..]);
+    (out, markers)
+}
+
+fn collapse_near_markers(text: &str, max: usize, markers: &[usize]) -> String {
+    if max == usize::MAX || markers.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut run: Vec<&str> = Vec::new();
+    let mut run_start = 0;
+    let mut offset = 0;
+    let flush = |out: &mut String, run: &mut Vec<&str>, run_start: usize, run_end: usize| {
+        if run.is_empty() {
+            return;
+        }
+        let touched = markers.iter().any(|&m| m >= run_start && m <= run_end);
+        if touched {
+            for _ in 0..run.len().min(max) {
+                out.push('\n');
+            }
+        } else {
+            run.iter().for_each(|l| out.push_str(l));
+        }
+        run.clear();
+    };
+    for line in text.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            if run.is_empty() {
+                run_start = offset;
+            }
+            run.push(line);
+        } else {
+            flush(&mut out, &mut run, run_start, offset);
+            out.push_str(line);
+        }
+        offset += line.len();
+    }
+    flush(&mut out, &mut run, run_start, offset);
+    out
 }
 
 #[cfg(all(test, feature = "rust-lang"))]
