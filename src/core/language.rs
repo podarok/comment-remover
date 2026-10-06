@@ -581,3 +581,37 @@ pub static COMMENT_QUERIES: Lazy<HashMap<TreeSitterLanguage, &'static str>> = La
 
     m
 });
+
+/// Maps a file extension to `(language name, cargo feature)` regardless of which
+/// features are compiled in. Used to tell "not compiled in" from "no such language".
+pub fn feature_for_extension(ext: &str) -> Option<(&'static str, &'static str)> {
+    Some(match ext.to_lowercase().as_str() {
+        "sh" | "bash" => ("Bash", "bash"),
+        "c" | "h" => ("C", "c"),
+        "cs" => ("C#", "c-sharp"),
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "c++" => ("C++", "cpp"),
+        "css" => ("CSS", "css"),
+        "go" => ("Go", "go"),
+        "hs" => ("Haskell", "haskell"),
+        "html" | "htm" => ("HTML", "html"),
+        "java" => ("Java", "java"),
+        "js" | "jsx" | "mjs" | "cjs" => ("JavaScript", "javascript"),
+        "lua" => ("Lua", "lua"),
+        "php" => ("PHP", "php"),
+        "py" | "pyw" => ("Python", "python"),
+        "rb" => ("Ruby", "ruby"),
+        "rs" => ("Rust", "rust-lang"),
+        "scala" => ("Scala", "scala"),
+        "swift" => ("Swift", "swift"),
+        "ts" | "mts" | "cts" => ("TypeScript", "typescript"),
+        "tsx" => ("TSX", "typescript"),
+        "sql" => ("SQL", "sql"),
+        "pl" | "pm" | "t" => ("Perl", "perl"),
+        "r" | "rdata" => ("R", "r"),
+        "dart" => ("Dart", "dart"),
+        "ex" | "exs" => ("Elixir", "elixir"),
+        "toml" => ("TOML", "toml"),
+        "ini" => ("INI", "ini"),
+        _ => return None,
+    })
+}

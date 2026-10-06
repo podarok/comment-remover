@@ -20,7 +20,7 @@
 //! Using `io_error` to wrap an I/O error:
 //!
 //! ```
-//! use comment_remover::error::io_error;
+//! use comment_remover::error::{AppError, io_error};
 //! use std::fs::File;
 //! use std::path::Path;
 //!
@@ -106,6 +106,21 @@ pub enum AppError {
     /// ```
     #[error("Unsupported language: {0}")]
     UnsupportedLanguage(String),
+
+    /// The file's language is known, but its grammar was not compiled into this binary.
+    #[error("{path}: {language} support is not compiled into this build (rebuild with `--features {feature}`)")]
+    LanguageNotCompiled {
+        /// Offending path.
+        path: String,
+        /// Human-readable language name.
+        language: String,
+        /// Cargo feature that enables it.
+        feature: String,
+    },
+
+    /// The file has no known comment syntax (images, data files); skipped, not a failure.
+    #[error("{0}: no known comment syntax, skipped")]
+    Skipped(String),
 
     /// An error occurred while creating or executing a Tree-sitter query.
     ///
@@ -290,7 +305,7 @@ pub type Result<T> = std::result::Result<T, AppError>;
 /// # Example
 ///
 /// ```
-/// use comment_remover::error::io_error;
+/// use comment_remover::error::{AppError, io_error};
 /// use std::fs::File;
 /// use std::path::Path;
 ///

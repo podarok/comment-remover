@@ -297,10 +297,12 @@ impl Cli {
                 .collect()
         });
 
-        let (success, failed, errors) = process_results(results);
-        report_results(success, failed, &errors, resolved.json);
+        let (success, failed, skipped, errors) = process_results(results);
+        report_results(success, failed, skipped, &errors, resolved.json);
 
-        if failed > 0 && !resolved.force {
+        if success == 0 && (failed > 0 || skipped > 0) {
+            Err(AppError::NoFiles)
+        } else if failed > 0 && !resolved.force {
             Err(AppError::NoFiles)
         } else {
             Ok(())
@@ -361,8 +363,20 @@ impl Cli {
         let language = if let Some(lang) = cfg.language_override {
             lang
         } else {
-            TreeSitterLanguage::detect_from_path(path)
-                .ok_or_else(|| AppError::UnsupportedLanguage(path.display().to_string()))?
+            match TreeSitterLanguage::detect_from_path(path) {
+                Some(lang) => lang,
+                None => {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    return Err(match crate::core::language::feature_for_extension(ext) {
+                        Some((language, feature)) => AppError::LanguageNotCompiled {
+                            path: path.display().to_string(),
+                            language: language.to_string(),
+                            feature: feature.to_string(),
+                        },
+                        None => AppError::Skipped(path.display().to_string()),
+                    });
+                }
+            }
         };
 
         let remover = CommentRemover::with_keep_patterns(language, cfg.collapse, cfg.keep_patterns.clone());
@@ -480,20 +494,22 @@ fn read_stdin() -> io::Result<String> {
 /// # Returns
 ///
 /// A tuple `(success_count, failure_count, errors)`.
-fn process_results(results: Vec<Result<()>>) -> (usize, usize, Vec<AppError>) {
+fn process_results(results: Vec<Result<()>>) -> (usize, usize, usize, Vec<AppError>) {
     let mut success = 0;
     let mut failed = 0;
+    let mut skipped = 0;
     let mut errors = Vec::new();
     for res in results {
         match res {
             Ok(()) => success += 1,
+            Err(AppError::Skipped(_)) => skipped += 1,
             Err(e) => {
                 failed += 1;
                 errors.push(e);
             }
         }
     }
-    (success, failed, errors)
+    (success, failed, skipped, errors)
 }
 
 /// Reports the final processing results to the user.
@@ -501,18 +517,22 @@ fn process_results(results: Vec<Result<()>>) -> (usize, usize, Vec<AppError>) {
 /// If `json` is true, prints a JSON object with success count, failure count,
 /// and a list of error messages. Otherwise, uses `tracing` to log the summary
 /// and any errors.
-fn report_results(success: usize, failed: usize, errors: &[AppError], json: bool) {
+fn report_results(success: usize, failed: usize, skipped: usize, errors: &[AppError], json: bool) {
     if json {
         let failures: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
         let summary = json!({
             "success": success,
             "failed": failed,
+            "skipped": skipped,
             "failures": failures,
         });
         let output = serde_json::to_string_pretty(&summary)
             .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize JSON: {}\"}}", e));
         println!("{}", output);
     } else {
+        if skipped > 0 {
+            warn!("Skipped {} file(s) without a known comment syntax (images, data files)", skipped);
+        }
         if failed == 0 {
             info!("Successfully processed {} files", success);
         } else {

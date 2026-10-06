@@ -67,7 +67,7 @@ assert_cmd = "2.1.2"
 predicates = "3.1.4"
 
 [features]
-default = ["c", "cpp", "rust-lang", "javascript", "python"]
+default = ["c", "cpp", "rust-lang", "javascript", "typescript", "python"]
 bash = ["dep:tree-sitter-bash"]
 c = ["dep:tree-sitter-c"]
 c-sharp = ["dep:tree-sitter-c-sharp"]
