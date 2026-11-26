@@ -77,6 +77,14 @@ pub const DEFAULT_KEEP_PATTERNS: &[&str] = &[
     r"^#\s*pylint:\s*disable",
 ];
 
+/// A `#!` interpreter line at the very start of a file (shell, Python, Ruby, Perl, Node ...).
+/// Grammars that lex it as a comment would otherwise drop it and the script stops being
+/// executable. Position matters, so this is a check rather than a keep pattern; a Rust inner
+/// attribute (`#![...]`) is not a shebang.
+fn is_shebang(range: &std::ops::Range<usize>, text: &str) -> bool {
+    range.start == 0 && text.starts_with("#!") && !text.starts_with("#![")
+}
+
 /// Compiles `DEFAULT_KEEP_PATTERNS` plus any caller-supplied extra patterns
 /// into a single `Regex` list. Returns an error string (not `AppError`, to
 /// keep this module free of a dependency edge back onto CLI-facing error
@@ -210,7 +218,7 @@ impl CommentRemover {
             for capture in m.captures {
                 let range = capture.node.byte_range();
                 let text = &input[range.clone()];
-                if self.keep_patterns.iter().any(|p| p.is_match(text)) {
+                if is_shebang(&range, text) || self.keep_patterns.iter().any(|p| p.is_match(text)) {
                     continue;
                 }
                 comment_ranges.push(range);
